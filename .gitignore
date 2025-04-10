@@ -1,6 +1,9 @@
 # Build files
 exfs2
 
+# Files segments
+*.seg
+
 # Prerequisites
 *.d
 
