@@ -1,0 +1,45 @@
+Update the source code such that inodeseg0 contains a two parts of data. First part is a bitmap of 255 length keeping information about which inode is full or empty. If all the inodes are full, create a new file inodeseg1 and continue the same thing. For inodeseg0 the first bitmap should be stored with first 0 to 4096 bytes and then another 255 of inodes that are each 4096 bytes.
+
+Inode struct looks like this
+typedef struct
+{
+    uint32_t type;                             // File type (regular or directory)
+    uint64_t size;                             // File size in bytes
+    uint32_t direct_blocks[MAX_DIRECT_BLOCKS]; // Direct block pointers
+    uint32_t single_indirect;                  // Single indirect block
+    uint32_t double_indirect;                  // Double indirect block
+} inode_t;
+
+Then there is another file that needs to be created dataseg0, similar to inode the first 4069 bytes of the data segment file is also used to store a bitmap of 255 length that keeps track of the information of the remaining 255 data block are filled or not. 
+
+typedef struct {
+    char data[4096];
+} datablock_t;
+
+The following is the structure of the two files inodes and datasegments. Both should create new file if the current files are full and keep on adding if necessary.
+
+Storing a file in this file system.
+
+The first inode of the inodeseg0, is allocated for root directory. This inode point to a datablock where a list of its files and subdirectory are listed. If its a file, then the data segment will have location of the inode refering to that file. If its a directoty, then the data segment will have location of the directory entry inode (which will point to another data block having locations).
+Here the inode are of two types, one is of file types that has location of where the data of the file is and another is of directory types which points to the datablock thath contains the list of files and respective inodes.
+
+Possible needed structs that may be used or unused based on the program.
+
+struct dirblock {
+    struct dirent dirents[10];
+}
+
+struct dataseg {
+    int FBL[<calculate this>];
+    struct datablock [200];
+}
+
+struct dirent {
+    char name[255];
+    int nodenum;
+    int type;
+    int inuse;
+}
+
+It is not necessary to handle error while reading and writing to a file. Only handle error if its absolutely necessary.
+
