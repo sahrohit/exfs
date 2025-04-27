@@ -39,6 +39,67 @@ typedef struct
     char data[BLOCK_SIZE]; // Data block content
 } datablock_t;
 
+// Create a new struct similar to datablock_t that stores the name and inode number of the file
+typedef struct
+{
+    char name[256];        // File name
+    uint32_t inode_number; // Inode number
+    uint32_t type;         // File type (regular or directory)
+    uint32_t inuse;        // In-use flag
+} directory_entry_t;
+
+typedef struct
+{
+    directory_entry_t entries[BLOCK_SIZE / sizeof(directory_entry_t)]; // Directory entries
+} directoryblock_t;
+
+// Create a function read_directory_block that takes a directory block number and read the directory block from the segment file. If the directory block number is greater than 255 take divisor as a file name number and take the remainder as the directory block number. Read the segment file and read the directory block from the file. If the file is not found return -1. If the directory block is not found return -2. If the directory block is found return 0.
+int read_directory_block(int directory_block_number, directoryblock_t *directory_block)
+{
+    uint8_t bitmap[BITMAP_BYTES];
+    FILE *file = NULL;
+    char filename[32];
+    int segment_num = directory_block_number / 256;           // Calculate segment number
+    int directory_block_index = directory_block_number % 256; // Calculate directory block index
+
+    // Generate segment filename
+    sprintf(filename, DATA_SEGMENT_NAME_PATTERN, segment_num);
+
+    // Try to open the file
+    file = fopen(filename, "r+b");
+    if (file == NULL)
+    {
+        perror("Failed to open data segment file");
+        return -1; // File not found
+    }
+
+    // Read the bitmap from the file
+    if (fread(bitmap, sizeof(bitmap), 1, file) != 1)
+    {
+        fclose(file);
+        return -2; // Failed to read bitmap
+    }
+
+    // Check if the directory block is used
+    if (bitmap[directory_block_index] == 0)
+    {
+        fclose(file);
+        return -2; // Directory block not found
+    }
+
+    // Read the directory block from the file
+    fseek(file, (directory_block_index + 1) * BLOCK_SIZE, SEEK_SET);
+    size_t read = fread(directory_block, sizeof(directoryblock_t), 1, file);
+    fclose(file);
+
+    if (read != 1)
+    {
+        return -2; // Failed to read directory block
+    }
+
+    return 0; // Success
+}
+
 // Create an function to read the inode from a segment file. If the inode number is greater than 255 take divisor as a file name number and take the remainder as the inode number. Read the segment file and read the inode from the file. If the file is not found return -1. If the inode is not found return -2. If the inode is found return 0.
 int read_inode(int inode_number, inode_t *inode)
 {
@@ -148,7 +209,7 @@ int create_inode(inode_t *inode)
         // Generate segment filename
         sprintf(filename, INODE_SEGMENT_NAME_PATTERN, segment_num);
 
-        printf("Checking segment file %s...\n", filename);
+        // printf("Checking segment file %s...\n", filename);
 
         // Try to open the file
         file = fopen(filename, "r+b");
@@ -204,12 +265,12 @@ int create_inode(inode_t *inode)
             // Mark the block as used
             bitmap[i] = 1;
 
-            printf("Current Bitmap: ");
-            for (int j = 0; j < BITMAP_BYTES; j++)
-            {
-                printf("%u ", bitmap[j]);
-            }
-            printf("\n");
+            // printf("Current Bitmap: ");
+            // for (int j = 0; j < BITMAP_BYTES; j++)
+            // {
+            //     printf("%u ", bitmap[j]);
+            // }
+            // printf("\n");
 
             // Update the bitmap in the file
             fseek(file, 0, SEEK_SET);
@@ -249,7 +310,7 @@ int create_datablock(datablock_t *datablock)
         // Generate segment filename
         sprintf(filename, DATA_SEGMENT_NAME_PATTERN, segment_num);
 
-        printf("Checking segment file %s...\n", filename);
+        // printf("Checking segment file %s...\n", filename);
 
         // Try to open the file
         file = fopen(filename, "r+b");
@@ -305,12 +366,12 @@ int create_datablock(datablock_t *datablock)
             // Mark the block as used
             bitmap[i] = 1;
 
-            printf("Current Bitmap: ");
-            for (int j = 0; j < BITMAP_BYTES; j++)
-            {
-                printf("%u ", bitmap[j]);
-            }
-            printf("\n");
+            // printf("Current Bitmap: ");
+            // for (int j = 0; j < BITMAP_BYTES; j++)
+            // {
+            //     printf("%u ", bitmap[j]);
+            // }
+            // printf("\n");
 
             // Update the bitmap in the file
             fseek(file, 0, SEEK_SET);
@@ -334,6 +395,220 @@ int create_datablock(datablock_t *datablock)
     // Should never reach here because we already checked for free space
     fclose(file);
     return -1;
+}
+
+// Create a function create_directoryblock that takes a directoryblock and create a directoryblock in the file system. The directoryblock is created same as the create_datablock function. The difference is that instead of storing the datablock it stores a directory_block. The function returns the index of the directoryblock.
+int create_directoryblock(directoryblock_t *directory_block)
+{
+    uint8_t bitmap[BITMAP_BYTES];
+    FILE *file = NULL;
+    char filename[32];
+    int segment_num = 0;
+    int found_space = 0;
+
+    // Try segments until we find one with free space
+    while (!found_space)
+    {
+        // Generate segment filename
+        sprintf(filename, DATA_SEGMENT_NAME_PATTERN, segment_num);
+
+        // printf("Checking segment file %s...\n", filename);
+
+        // Try to open the file
+        file = fopen(filename, "r+b");
+        if (file == NULL)
+        {
+            // File doesn't exist, create a new segment
+            file = fopen(filename, "w+b");
+            if (file == NULL)
+            {
+                perror("Failed to create inode segment file");
+                return -1;
+            }
+
+            // Initialize new bitmap for this segment
+            memset(&bitmap, 0, BITMAP_BYTES);
+
+            fwrite(&bitmap, sizeof(bitmap), 1, file);
+            found_space = 1;
+        }
+        else
+        {
+            // Read the bitmap from existing segment
+            if (fread(bitmap, sizeof(bitmap), 1, file) != 1)
+            {
+                fclose(file);
+                segment_num++;
+                continue;
+            }
+
+            // Check if there's free space
+            for (int i = 0; i < BITMAP_BYTES; i++)
+            {
+                if (bitmap[i] == 0)
+                {
+                    found_space = 1;
+                    break;
+                }
+            }
+
+            if (!found_space)
+            {
+                fclose(file);
+                segment_num++;
+            }
+        }
+    }
+
+    // Find an empty block in the bitmap
+    for (int i = 0; i < BITMAP_BYTES; i++)
+    {
+        if (bitmap[i] == 0)
+        { // Check if the block is free
+            // Mark the block as used
+            bitmap[i] = 1;
+
+            // printf("Current Bitmap: ");
+            // for (int j = 0; j < BITMAP_BYTES; j++)
+            // {
+            //     printf("%u ", bitmap[j]);
+            // }
+            // printf("\n");
+
+            // Update the bitmap in the file
+            fseek(file, 0, SEEK_SET);
+            fwrite(&bitmap, sizeof(bitmap), 1, file);
+
+            // Write the inode to the file
+            fseek(file, (i + 1) * DATA_SIZE, SEEK_SET);
+            size_t written = fwrite(directory_block, sizeof(directoryblock_t), 1, file);
+            if (written != 1)
+            {
+                perror("Failed to write inode to file");
+                fclose(file);
+                return -1;
+            }
+            fclose(file);
+            return i; // Return data index for success
+        }
+    }
+    // Should never reach here because we already checked for free space
+    fclose(file);
+    return -1;
+}
+
+// Create a function add_directoryentry_to_directoryblock that takes a directoryblock and update its array of directory entires. The function takes in directoryblock and a directory entry and adds that directory entry to the directoryblock. The function returns 0 on success and -1 on failure.
+
+int add_directoryentry_to_directoryblock(uint32_t directoryblock_index, directory_entry_t *entry)
+{
+    directoryblock_t directory_block;
+
+    // Read the existing directory block
+    int result = read_directory_block(directoryblock_index, &directory_block);
+    if (result < 0)
+    {
+        return result; // Failed to read the directory block
+    }
+
+    // Check if there's space for a new entry
+    for (int i = 0; i < BLOCK_SIZE / sizeof(directory_entry_t); i++)
+    {
+        if (directory_block.entries[i].inuse == 0)
+        {
+            // Add the new entry to the first empty slot
+            directory_block.entries[i] = *entry;
+
+            // Update the directory block in the file
+            uint8_t bitmap[BITMAP_BYTES];
+            FILE *file = NULL;
+            char filename[32];
+            int segment_num = directoryblock_index / 256;
+            int block_index = directoryblock_index % 256;
+
+            sprintf(filename, DATA_SEGMENT_NAME_PATTERN, segment_num);
+            file = fopen(filename, "r+b");
+            if (file == NULL)
+            {
+                return -1;
+            }
+
+            // Skip the bitmap
+            fseek(file, (block_index + 1) * BLOCK_SIZE, SEEK_SET);
+
+            // Write the updated directory block
+            if (fwrite(&directory_block, sizeof(directoryblock_t), 1, file) != 1)
+            {
+                fclose(file);
+                return -1;
+            }
+
+            fclose(file);
+            return 0; // Success
+        }
+    }
+
+    return -1; // Directory block is full
+}
+
+// Create a function create_directory that takes a directory name and create a directory in the file system. The directory is created by creating a datablock and writing the directory name to the datablock. The datablock is then saved to the first available free block in an available segment. The function returns the index of the datablock. The second paramter is the inode number of the parent directory. The function creates a directory entry in the parent directory for the new directory. If the second parameter is not provided then the parent directory is set to have inode number 0. The function returns the index of the datablock.
+// It creates a directory entry in the parent directory for the new directory. If the second parameter is not provided then the parent directory is set to have inode number 0. The function returns the index of the datablock.
+int create_directory(const char *directory_name, int parent_inode_number)
+{
+    directoryblock_t directory_block;
+    uint32_t block_count = 0;
+
+    // Create a new directory entry
+    directory_entry_t new_entry;
+    strncpy(new_entry.name, directory_name, sizeof(new_entry.name) - 1);
+    new_entry.name[sizeof(new_entry.name) - 1] = '\0'; // Ensure null termination
+    new_entry.inode_number = 0;                        // Placeholder for inode number
+    new_entry.type = FILE_TYPE_DIRECTORY;              // Directory type
+    new_entry.inuse = 1;                               // Mark as in-use
+
+    // Initialize the directory block
+    memset(&directory_block, 0, sizeof(directoryblock_t));
+    memcpy(&directory_block.entries[0], &new_entry, sizeof(directory_entry_t));
+
+    // Create a datablock and store its index
+    int directoryblock_index = create_directoryblock(&directory_block);
+    if (directoryblock_index < 0)
+    {
+        perror("Failed to create datablock");
+        return -1;
+    }
+
+    // Save the datablock index in the parent inode's direct blocks
+    if (parent_inode_number > 0)
+    {
+        inode_t parent_inode;
+        if (read_inode(parent_inode_number, &parent_inode) != 0)
+        {
+            perror("Failed to read parent inode");
+            return -1;
+        }
+
+        for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
+        {
+            if (parent_inode.direct_blocks[i] == 0)
+            {
+                parent_inode.direct_blocks[i] = directoryblock_index;
+                break;
+            }
+        }
+
+        // Update the parent inode in the segment file
+        FILE *segment_file = fopen(INODE_SEGMENT_NAME_PATTERN, "r+b");
+        if (segment_file == NULL)
+        {
+            perror("Failed to open segment file");
+            return -1;
+        }
+        fseek(segment_file, (parent_inode_number + 1) * INODE_SIZE, SEEK_SET);
+        fwrite(&parent_inode, sizeof(inode_t), 1, segment_file);
+        fclose(segment_file);
+    }
+
+    return directoryblock_index; // Return the index of the created datablock
 }
 
 // Function that takes a file path and create a inode for that file and save it to the first available free block in an available segment and then create a datablock for that file and save it to the first available free block in an available segment. Save the datablock index in the inode.direct_blocks[0].
@@ -429,9 +704,43 @@ int create_inode_for_file(const char *file_path)
     return inode_index;
 }
 
+// Create a function named create_inode_for_folder that takes two parameters. The first parameter is the inode
+
+// Split a path into segments and return the count of segments
+int split_path(const char *path, char *segments[], int max_segments)
+{
+    char path_copy[256]; // Create a copy since strtok modifies the string
+    strncpy(path_copy, path, sizeof(path_copy) - 1);
+    path_copy[sizeof(path_copy) - 1] = '\0'; // Ensure null termination
+
+    int segment_count = 0;
+    char *segment = strtok(path_copy, "/");
+
+    while (segment != NULL && segment_count < max_segments)
+    {
+        segments[segment_count++] = strdup(segment);
+        segment = strtok(NULL, "/");
+    }
+    segments[segment_count] = NULL;
+
+    return segment_count;
+}
+
 // Create a function to add file to the filesystem
 int add_file(const char *fs_path, const char *local_file)
 {
+
+    // In the add_file function:
+    char *path_segments[10];
+    int segment_count = split_path(fs_path, path_segments, 10);
+
+    // // Print the segments
+    // printf("Path Segments:\n");
+    // for (int i = 0; i < segment_count; i++)
+    // {
+    //     printf("%s\n", path_segments[i]);
+    // }
+
     size_t inode_index = create_inode_for_file(local_file);
     if (inode_index < 0)
     {
@@ -439,7 +748,99 @@ int add_file(const char *fs_path, const char *local_file)
         return -1;
     }
 
-    printf("Inode created successfully with index: %zu\n", inode_index);
+    // // Create these path segments in the filesystem such that the root -> directory_entry of root (containing the name and inode of dir1) -> inode of dir1 -> directory_entry of dir1 (containing the name and inode of dir2) -> inode of dir2 -> directory_entry of dir2 (containing the name and inode of file) -> inode of file -> datablock of file
+    // // Starting from root, if the directory is not present create it and add the directory entry to the parent directory. If the directory is present then add the directory entry to the parent directory. If the file is not present create it and add the file entry to the parent directory. If the file is present then update the file entry in the parent directory.
+
+    for (int i = 0; i < segment_count; i++)
+    {
+        int parent_inode_number = 0; // Start with root inode
+        // Check if the directory exists
+        directoryblock_t directory_block;
+        int result = read_directory_block(0, &directory_block);
+
+        printf("Directory block %d \n", directory_block.entries[0].inode_number);
+        printf("Directory block %d \n", directory_block.entries[0].inuse);
+        printf("Directory block %d \n", directory_block.entries[0].type);
+        printf("Directory block %s \n", directory_block.entries[0].name);
+
+        printf("Directory lookup by index %s %d \n", path_segments[i], parent_inode_number);
+
+        // Create an array of inodes that needs to be updated upon creation of each new directory
+
+        // If the directory block is not found, create it
+        if (result < 0)
+        {
+            printf("Directory block not found, creating directory %d...\n", path_segments[i]);
+            int res = create_directory(path_segments[i], parent_inode_number);
+
+            directoryblock_t new_entry;
+            read_directory_block(res, &new_entry);
+
+            parent_inode_number = res;
+
+            // // Update the directory block in the segment file
+            // FILE *segment_file = fopen(INODE_SEGMENT_NAME_PATTERN, "r+b");
+            // if (segment_file == NULL)
+            // {
+            //     perror("Failed to open segment file");
+            //     return -1;
+            // }
+
+            // fseek(segment_file, (i + 1) * INODE_SIZE, SEEK_SET);
+            // fwrite(&directory_block, sizeof(directoryblock_t), 1, segment_file);
+            // fclose(segment_file);
+            // // Update the parent inode number
+            // parent_inode_number = res;
+        }
+        else
+        {
+            printf("Directory block found, checking for entry %s...\n", path_segments[i]);
+            printf("Add directory entry to parent directory %d...\n", parent_inode_number);
+            // // Directory exists, check if the entry already exists
+            for (int j = 0; j < BLOCK_SIZE / sizeof(directory_entry_t); j++)
+            {
+                if (strcmp(directory_block.entries[j].name, path_segments[i]) == 0 && directory_block.entries[j].inuse == 1)
+                {
+                    printf("Entry already exists: %s\n", directory_block.entries[j].name);
+                    // Entry already exists, update it
+                    directory_block.entries[j].inode_number = inode_index;
+                    parent_inode_number = directory_block.entries[j].inode_number;
+                    // break;
+                }
+            }
+
+            // // Update the directory block in the segment file
+            // FILE *segment_file = fopen(INODE_SEGMENT_NAME_PATTERN, "r+b");
+            // if (segment_file == NULL)
+            // {
+            //     perror("Failed to open segment file");
+            //     return -1;
+            // }
+            // fseek(segment_file, (i + 1) * INODE_SIZE, SEEK_SET);
+            // fwrite(&directory_block, sizeof(directoryblock_t), 1, segment_file);
+            // fclose(segment_file);
+        }
+
+        // If it does not exist create it and add the directory entry to the parent directory
+        // If it exists then add the directory entry to the parent directory
+        // If it is the last segment then create the file and add the file entry to the parent directory
+        // If it is not the last segment then create the directory and add the directory entry to the parent directory
+    }
+
+    // Add directory entry to the parent directory
+
+    directory_entry_t new_entry;
+    new_entry.inode_number = inode_index;
+    new_entry.type = FILE_TYPE_REGULAR; // Regular file
+    strncpy(new_entry.name, "sample.txt", sizeof(new_entry.name) - 1);
+    new_entry.name[sizeof(new_entry.name) - 1] = '\0'; // Ensure null termination
+    new_entry.inuse = 1;                               // Mark as in-use
+
+    // Add inode_index to the parent directory entries
+
+    add_directoryentry_to_directoryblock(0, &new_entry);
+
+    // printf("Inode created successfully with index: %zu\n", inode_index);
 
     inode_t extracted_inode;
     int result = read_inode(inode_index, &extracted_inode);
@@ -449,17 +850,80 @@ int add_file(const char *fs_path, const char *local_file)
         return -1;
     }
 
-    printf("Inode read successfully:\n");
-    printf("Type: %u\n", extracted_inode.type);
-    printf("Size: %lu\n", extracted_inode.size);
-    printf("Direct blocks: ");
+    // printf("Inode read successfully:\n");
+    // printf("Type: %u\n", extracted_inode.type);
+    // printf("Size: %lu\n", extracted_inode.size);
+    // printf("Direct blocks: ");
+    // for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
+    // {
+    //     printf("%u ", extracted_inode.direct_blocks[i]);
+    // }
+    // printf("\n");
+    // printf("Single indirect: %u\n", extracted_inode.single_indirect);
+    // printf("Double indirect: %u\n", extracted_inode.double_indirect);
+
+    // From the list of direct blocks, read the datablocks and print their contents
     for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
     {
-        printf("%u ", extracted_inode.direct_blocks[i]);
+
+        if (extracted_inode.direct_blocks[i] == 0)
+        {
+            break; // No more direct blocks
+        }
+
+        datablock_t datablock;
+        int result = read_datablock(extracted_inode.direct_blocks[i], &datablock);
+        if (result < 0)
+        {
+            fprintf(stderr, "Failed to read datablock\n");
+            return -1;
+        }
+
+        // printf("%u", extracted_inode.direct_blocks[i]);
+
+        // for (int j = 0; j < BLOCK_SIZE; j++)
+        // {
+        //     printf("%c", datablock.data[j]);
+        // }
     }
-    printf("\n");
-    printf("Single indirect: %u\n", extracted_inode.single_indirect);
-    printf("Double indirect: %u\n", extracted_inode.double_indirect);
+}
+
+// Create a function to extract a file from the file system. The function takes a path as input and extracts the file from the file system. The function returns 0 on success and -1 on failure.
+int extract_file(const char *path)
+{
+    // In the add_file function:
+    char *path_segments[10];
+    int segment_count = split_path(path, path_segments, 10);
+
+    // Print the segments
+    printf("Path Segments:\n");
+    for (int i = 0; i < segment_count; i++)
+    {
+        printf("%s\n", path_segments[i]);
+    }
+
+    inode_t extracted_inode;
+    // Reading from the second inode segment, marking the inode_number as 1
+    // TODO: Read the inode number recursively from the path
+    int result = read_inode(1, &extracted_inode);
+
+    if (result < 0)
+    {
+        fprintf(stderr, "Failed to read inode\n");
+        return -1;
+    }
+
+    // printf("Inode read successfully:\n");
+    // printf("Type: %u\n", extracted_inode.type);
+    // printf("Size: %lu\n", extracted_inode.size);
+    // printf("Direct blocks: ");
+    // for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
+    // {
+    //     printf("%u ", extracted_inode.direct_blocks[i]);
+    // }
+    // printf("\n");
+    // printf("Single indirect: %u\n", extracted_inode.single_indirect);
+    // printf("Double indirect: %u\n", extracted_inode.double_indirect);
 
     // From the list of direct blocks, read the datablocks and print their contents
     for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
@@ -485,13 +949,131 @@ int add_file(const char *fs_path, const char *local_file)
             printf("%c", datablock.data[j]);
         }
     }
+
+    return 0;
+}
+
+// Create a function to debug the path. This function takes prints the bitmap of all the segments and inodes files. Both INODE_SEGMENT_NAME_PATTERN and DATA_SEGMENT_NAME_PATTERN inital bitmap are printed here.
+int debug_path(const char *path)
+{
+    // In the add_file function:
+    char *path_segments[10];
+    int segment_count = split_path(path, path_segments, 10);
+
+    // Print the segments
+    printf("Path Segments:\n");
+    for (int i = 0; i < segment_count; i++)
+    {
+        printf("%s\n", path_segments[i]);
+    }
+
+    // Print the bitmap of all the segments and inodes files
+    int segment_num = 0;
+    char filename[32];
+    FILE *file = NULL;
+    uint8_t bitmap[BITMAP_BYTES];
+
+    // Check inode segments
+    while (1)
+    {
+        // Generate segment filename
+        sprintf(filename, INODE_SEGMENT_NAME_PATTERN, segment_num);
+
+        // Try to open the file
+        file = fopen(filename, "rb");
+        if (file == NULL)
+        {
+            // No more inode segments
+            break;
+        }
+
+        // Read the bitmap from the file
+        if (fread(bitmap, sizeof(bitmap), 1, file) != 1)
+        {
+            perror("Failed to read bitmap");
+            fclose(file);
+            return -2;
+        }
+
+        printf("Bitmap of %s: ", filename);
+        for (int j = 0; j < BITMAP_BYTES; j++)
+        {
+            printf("%u ", bitmap[j]);
+        }
+        printf("\n");
+
+        fclose(file);
+        segment_num++;
+    }
+
+    // Reset segment_num for data segments
+    segment_num = 0;
+
+    // Check data segments
+    while (1)
+    {
+        // Generate segment filename
+        sprintf(filename, DATA_SEGMENT_NAME_PATTERN, segment_num);
+
+        // Try to open the file
+        file = fopen(filename, "rb");
+        if (file == NULL)
+        {
+            // No more data segments
+            break;
+        }
+
+        // Read the bitmap from the file
+        if (fread(bitmap, sizeof(bitmap), 1, file) != 1)
+        {
+            perror("Failed to read bitmap");
+            fclose(file);
+            return -2;
+        }
+
+        printf("Bitmap of %s: ", filename);
+        for (int j = 0; j < BITMAP_BYTES; j++)
+        {
+            printf("%u ", bitmap[j]);
+        }
+        printf("\n");
+
+        fclose(file);
+        segment_num++;
+    }
+
+    return 0;
+}
+
+// This function named list_directory() will list all recursively fetch all the inodes details from the directories entries of the root directory. If the fetched inode is a directory then it will recursively fetch all the inodes details from the directories entries of the fetched inode. The function will print the name of the file and its inode number. The function will return 0 on success and -1 on failure.
+int list_directory()
+{
+    directoryblock_t directory_block;
+    int result = read_directory_block(0, &directory_block); // Read the root directory block
+
+    if (result < 0)
+    {
+        fprintf(stderr, "Failed to read root directory block\n");
+        return -1;
+    }
+
+    printf("Root Directory Entries:\n");
+    for (int i = 0; i < BLOCK_SIZE / sizeof(directory_entry_t); i++)
+    {
+        if (directory_block.entries[i].inuse == 1)
+        {
+            printf("Name: %s, Inode Number: %u, %s, %s\n", directory_block.entries[i].name, directory_block.entries[i].inode_number, directory_block.entries[i].type == FILE_TYPE_DIRECTORY ? "Directory" : "File", directory_block.entries[i].inuse ? "In Use" : "Not In Use");
+        }
+    }
+
+    return 0;
 }
 
 // Create a function to initialize the file system that creates the first inode and first datasegments of the file system. The first inode is the root inode and the first datasegment is the root datasegment. The root inode is a directory and the root datasegment is a directory.
 int init_file_system()
 {
     inode_t inode;
-    datablock_t datablock;
+    directoryblock_t directoryblock;
     char inodeseg_filename[32];
     char dataseg_filename[32];
 
@@ -509,9 +1091,16 @@ int init_file_system()
     }
     else
     {
-        int root_datablock_index = create_datablock(&datablock);
 
-        inode.direct_blocks[0] = root_datablock_index;
+        directoryblock.entries[0].inode_number = 0;
+        directoryblock.entries[0].type = FILE_TYPE_DIRECTORY;
+        directoryblock.entries[0].inuse = 1;
+        strncpy(directoryblock.entries[0].name, "root", sizeof(directoryblock.entries[0].name) - 1);
+        directoryblock.entries[0].name[sizeof(directoryblock.entries[0].name) - 1] = '\0'; // Ensure null termination
+
+        int root_directoryblock_index = create_directoryblock(&directoryblock);
+        // printf("Root Datablock Index: %d\n", root_directoryblock_index);
+        inode.direct_blocks[0] = root_directoryblock_index;
 
         int root_inode_index = create_inode(&inode);
         if (root_inode_index < 0)
@@ -547,8 +1136,7 @@ int main(int argc, char *argv[])
         switch (opt)
         {
         case 'l': // List directory
-            printf("Listing directory...\n");
-            return 0;
+            return list_directory();
 
         case 'a': // Add file path
             fs_path = optarg;
@@ -563,12 +1151,10 @@ int main(int argc, char *argv[])
             // return remove_file(optarg);
 
         case 'e': // Extract file
-            return 0;
-            // return extract_file(optarg);
+            return extract_file(optarg);
 
         case 'D': // Debug path
-            return 0;
-            // return debug_path(optarg);
+            return debug_path(optarg);
 
         default:
             fprintf(stderr, "Usage: %s [-l] [-a fs_path -f local_file] [-r path] [-e path] [-D path]\n", argv[0]);
