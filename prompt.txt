@@ -43,3 +43,23 @@ struct dirent {
 
 It is not necessary to handle error while reading and writing to a file. Only handle error if its absolutely necessary.
 
+=========================================================
+
+Here the main.txt is a c program. In this C Program update the add_files function so that it takes in consideration of the fs_path and create folders and files based on the provided path.
+
+If the fs_path is /dir1/dir2/sample.txt
+
+Then the root inode at inode_index 0 will have direct_blocks mapping to directory_block at index 0. 
+
+Now inode for dir1 is created and then a new directory entry for under the root_directory block is created storing name as dir1 and the inode_number for recently created inode of dir1.
+
+Similarly, do the same for dir2 and save its inode_number in dir1 directory block that is accessed in inode direct_blocks[0].
+
+Now create a inode of type file and point it to the file created and then save the inode number and file name in the directory block of dir2.
+
+So now the chain would look something like this root inode -> root directory block -> dir1 inode -> dir1 directory block -> dir2 inode -> dir2 directory block -> sample.txt inode -> sample.txt directory block.
+
+For accessing each directory block, the inode of each has direct_blocks array where the first element of that direct_blocks array has index in the directory/datablock segment.
+
+
+
