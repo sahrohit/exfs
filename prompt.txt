@@ -61,5 +61,10 @@ So now the chain would look something like this root inode -> root directory blo
 
 For accessing each directory block, the inode of each has direct_blocks array where the first element of that direct_blocks array has index in the directory/datablock segment.
 
+=========================================================
 
+Update the list_directory function such that it lists inode starting from 0. If it is a folder then read its first direct block that points to a directory block and list all the directory entires of the directory block. If the directory entires points to more directory read the inode of that directory and recursively list all files and folders in a tree like structure organized.
 
+=========================================================
+
+Update the extract_file function such that its parses the path provided and then returns the data of it. The last path segment is the file name and before that is all folder name. So, starting at root inode, find its directory block and then look for first directory in that directory block, if not found exit with not found, if found read the inode number and the inode block and then its directory block. Look for second segment in the direcory block. Similary get to the file inode and read all the content of the file and print it.
