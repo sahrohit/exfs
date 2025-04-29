@@ -1441,6 +1441,347 @@ int init_file_system()
     }
 }
 
+// *************** Entirely AI Generated and not tested starts ***************
+// Create a function remove_file that takes a path as input and removes the file from the file system. The function returns 0 on success and -1 on failure. The function navigate through the paths and recursively deletes the last segment. If its a file, just delete the file and if its a folder delete the folder and also delete everything in the folder recursively. By deleting, if its a inode then mark it as free in the bitmap and if its a datablock then mark it as free in the bitmap. The function also updates the parent directory to remove the entry for the deleted file or folder. For the directory entry, it should mark the inuse as 0.
+int remove_inode_and_blocks(int inode_number);
+
+// Helper function to mark inode as free in bitmap
+int free_inode(int inode_number)
+{
+    FILE *file = NULL;
+    char filename[32];
+    int segment_num = inode_number / 255;
+    int inode_index = inode_number % 255;
+
+    sprintf(filename, INODE_SEGMENT_NAME_PATTERN, segment_num);
+    file = fopen(filename, "r+b");
+    if (file == NULL)
+    {
+        perror("Failed to open inode segment file");
+        return -1;
+    }
+
+    // Update bitmap to mark inode as free
+    uint8_t bitmap[BITMAP_BYTES];
+    if (fread(bitmap, sizeof(bitmap), 1, file) != 1)
+    {
+        fclose(file);
+        return -1;
+    }
+
+    bitmap[inode_index] = 0; // Mark as free
+
+    fseek(file, 0, SEEK_SET);
+    fwrite(bitmap, sizeof(bitmap), 1, file);
+    fclose(file);
+
+    return 0;
+}
+
+// Helper function to mark datablock as free in bitmap
+int free_datablock(int datablock_number)
+{
+    FILE *file = NULL;
+    char filename[32];
+    int segment_num = datablock_number / 255;
+    int block_index = datablock_number % 255;
+
+    sprintf(filename, DATA_SEGMENT_NAME_PATTERN, segment_num);
+    file = fopen(filename, "r+b");
+    if (file == NULL)
+    {
+        perror("Failed to open data segment file");
+        return -1;
+    }
+
+    // Update bitmap to mark block as free
+    uint8_t bitmap[BITMAP_BYTES];
+    if (fread(bitmap, sizeof(bitmap), 1, file) != 1)
+    {
+        fclose(file);
+        return -1;
+    }
+
+    bitmap[block_index] = 0; // Mark as free
+
+    fseek(file, 0, SEEK_SET);
+    fwrite(bitmap, sizeof(bitmap), 1, file);
+    fclose(file);
+
+    return 0;
+}
+
+// Recursive function to remove an inode and all associated blocks
+int remove_inode_and_blocks(int inode_number)
+{
+    inode_t inode;
+    int result = read_inode(inode_number, &inode);
+    if (result < 0)
+    {
+        return result;
+    }
+
+    // If it's a directory, recursively remove all entries
+    if (inode.type == FILE_TYPE_DIRECTORY)
+    {
+        for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
+        {
+            if (inode.direct_blocks[i] == MAX_UNIT_32 || inode.direct_blocks[i] == 0)
+            {
+                continue;
+            }
+
+            directoryblock_t dir_block;
+            if (read_directory_block(inode.direct_blocks[i], &dir_block) == 0)
+            {
+                // Remove all entries in this directory block
+                for (int j = 0; j < MAX_DIRECTORY_ENTRIES; j++)
+                {
+                    if (dir_block.entries[j].inuse == 1)
+                    {
+                        remove_inode_and_blocks(dir_block.entries[j].inode_number);
+                    }
+                }
+            }
+
+            // Free the directory block
+            free_datablock(inode.direct_blocks[i]);
+        }
+    }
+    else
+    {
+        // Regular file - free all datablocks
+        for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
+        {
+            if (inode.direct_blocks[i] != MAX_UNIT_32 && inode.direct_blocks[i] != 0)
+            {
+                free_datablock(inode.direct_blocks[i]);
+            }
+        }
+    }
+
+    // Also handle indirect blocks if they're used
+    if (inode.single_indirect != 0 && inode.single_indirect != MAX_UNIT_32)
+    {
+        // Read the indirect block and free all referenced blocks
+        datablock_t indirect_block;
+        if (read_datablock(inode.single_indirect, &indirect_block) == 0)
+        {
+            uint32_t *block_pointers = (uint32_t *)indirect_block.data;
+            for (int i = 0; i < BLOCK_SIZE / sizeof(uint32_t); i++)
+            {
+                if (block_pointers[i] != 0 && block_pointers[i] != MAX_UNIT_32)
+                {
+                    free_datablock(block_pointers[i]);
+                }
+            }
+        }
+        free_datablock(inode.single_indirect);
+    }
+
+    if (inode.double_indirect != 0 && inode.double_indirect != MAX_UNIT_32)
+    {
+        // Read the double indirect block
+        datablock_t double_indirect_block;
+        if (read_datablock(inode.double_indirect, &double_indirect_block) == 0)
+        {
+            uint32_t *indirect_pointers = (uint32_t *)double_indirect_block.data;
+            for (int i = 0; i < BLOCK_SIZE / sizeof(uint32_t); i++)
+            {
+                if (indirect_pointers[i] != 0 && indirect_pointers[i] != MAX_UNIT_32)
+                {
+                    // Read each single indirect block
+                    datablock_t indirect_block;
+                    if (read_datablock(indirect_pointers[i], &indirect_block) == 0)
+                    {
+                        uint32_t *block_pointers = (uint32_t *)indirect_block.data;
+                        for (int j = 0; j < BLOCK_SIZE / sizeof(uint32_t); j++)
+                        {
+                            if (block_pointers[j] != 0 && block_pointers[j] != MAX_UNIT_32)
+                            {
+                                free_datablock(block_pointers[j]);
+                            }
+                        }
+                    }
+                    free_datablock(indirect_pointers[i]);
+                }
+            }
+        }
+        free_datablock(inode.double_indirect);
+    }
+
+    // Finally, free the inode itself
+    return free_inode(inode_number);
+}
+
+int remove_file(const char *path)
+{
+    char *path_segments[10];
+    int segment_count = split_path(path, path_segments, 10);
+    if (segment_count <= 0)
+    {
+        return -1; // Invalid path
+    }
+
+    // Start with root inode
+    int current_inode_index = 0;
+    int parent_inode_index = 0;
+    int parent_dir_block_index = -1;
+    int entry_index_in_parent = -1;
+
+    inode_t current_inode;
+    directoryblock_t dir_block;
+
+    // Navigate to the parent of the target file/directory
+    for (int i = 0; i < segment_count - 1; i++)
+    {
+        if (read_inode(current_inode_index, &current_inode) < 0)
+        {
+            fprintf(stderr, "Failed to read inode at index %d\n", current_inode_index);
+            return -1;
+        }
+
+        if (current_inode.type != FILE_TYPE_DIRECTORY)
+        {
+            fprintf(stderr, "Path component %s is not a directory\n", path_segments[i]);
+            return -1;
+        }
+
+        int found_next_segment = 0;
+        for (int j = 0; j < MAX_DIRECT_BLOCKS; j++)
+        {
+            if (current_inode.direct_blocks[j] == MAX_UNIT_32 ||
+                current_inode.direct_blocks[j] == 0)
+            {
+                continue;
+            }
+
+            if (read_directory_block(current_inode.direct_blocks[j], &dir_block) < 0)
+            {
+                continue;
+            }
+
+            for (int k = 0; k < MAX_DIRECTORY_ENTRIES; k++)
+            {
+                if (dir_block.entries[k].inuse == 1 &&
+                    strcmp(dir_block.entries[k].name, path_segments[i]) == 0)
+                {
+                    parent_inode_index = current_inode_index;
+                    current_inode_index = dir_block.entries[k].inode_number;
+                    found_next_segment = 1;
+                    break;
+                }
+            }
+
+            if (found_next_segment)
+            {
+                break;
+            }
+        }
+
+        if (!found_next_segment)
+        {
+            fprintf(stderr, "Path component %s not found\n", path_segments[i]);
+            return -1;
+        }
+    }
+
+    // Now current_inode_index points to the parent directory
+    parent_inode_index = current_inode_index;
+
+    // Find the target file/directory in the parent
+    if (read_inode(parent_inode_index, &current_inode) < 0)
+    {
+        fprintf(stderr, "Failed to read parent directory inode\n");
+        return -1;
+    }
+
+    int target_inode_index = -1;
+    int found_target = 0;
+
+    for (int j = 0; j < MAX_DIRECT_BLOCKS; j++)
+    {
+        if (current_inode.direct_blocks[j] == MAX_UNIT_32 ||
+            current_inode.direct_blocks[j] == 0)
+        {
+            continue;
+        }
+
+        if (read_directory_block(current_inode.direct_blocks[j], &dir_block) < 0)
+        {
+            continue;
+        }
+
+        for (int k = 0; k < MAX_DIRECTORY_ENTRIES; k++)
+        {
+            if (dir_block.entries[k].inuse == 1 &&
+                strcmp(dir_block.entries[k].name, path_segments[segment_count - 1]) == 0)
+            {
+                target_inode_index = dir_block.entries[k].inode_number;
+                parent_dir_block_index = current_inode.direct_blocks[j];
+                entry_index_in_parent = k;
+                found_target = 1;
+                break;
+            }
+        }
+
+        if (found_target)
+        {
+            break;
+        }
+    }
+
+    if (!found_target || target_inode_index < 0)
+    {
+        fprintf(stderr, "Target %s not found in parent directory\n", path_segments[segment_count - 1]);
+        return -1;
+    }
+
+    // Remove the target file/directory recursively
+    if (remove_inode_and_blocks(target_inode_index) < 0)
+    {
+        fprintf(stderr, "Failed to remove target inode\n");
+        return -1;
+    }
+
+    // Update parent directory to remove the entry
+    if (read_directory_block(parent_dir_block_index, &dir_block) < 0)
+    {
+        fprintf(stderr, "Failed to read parent directory block\n");
+        return -1;
+    }
+
+    // Mark the directory entry as not in use
+    dir_block.entries[entry_index_in_parent].inuse = 0;
+
+    // Write the updated directory block back
+    FILE *file = NULL;
+    char filename[32];
+    int segment_num = parent_dir_block_index / 255;
+    int block_index = parent_dir_block_index % 255;
+
+    sprintf(filename, DATA_SEGMENT_NAME_PATTERN, segment_num);
+    file = fopen(filename, "r+b");
+    if (file == NULL)
+    {
+        return -1;
+    }
+
+    fseek(file, (block_index + 1) * BLOCK_SIZE, SEEK_SET);
+    fwrite(&dir_block, sizeof(directoryblock_t), 1, file);
+    fclose(file);
+
+    // // Free allocated memory for path segments
+    // for (int i = 0; i < segment_count; i++)
+    // {
+    //     free(path_segments[i]);
+    // }
+
+    return 0;
+}
+
+// *************** Entirely AI Generated and not tested ends ***************
+
 /*
  * Implementation
  */
@@ -1475,8 +1816,7 @@ int main(int argc, char *argv[])
             break;
 
         case 'r': // Remove file
-            return 0;
-            // return remove_file(optarg);
+            return remove_file(optarg);
 
         case 'e': // Extract file
             return extract_file(optarg);
