@@ -27,6 +27,8 @@
 /* File types */
 #define FILE_TYPE_REGULAR 1
 #define FILE_TYPE_DIRECTORY 2
+#define FILE_TYPE_DATA_L1 3
+#define FILE_TYPE_DATA_L2 4
 
 /* Segment file name pattern */
 #define INODE_SEGMENT_NAME_PATTERN "inodeseg%d"
@@ -36,6 +38,8 @@
 #define MAX_UNIT_32 (UINT32_MAX - 1)
 #define MAX_UNIT_64 (UINT64_MAX - 1)
 
+#define USE_SINGLE_INDIRECT 1
+
 typedef struct
 {
     uint32_t type;                             // File type (regular or directory)
@@ -44,7 +48,6 @@ typedef struct
     uint32_t single_indirect;                  // Single indirect block
     uint32_t double_indirect;                  // Double indirect block
     // uint32_t triple_indirect;                  // Triple indirect block
-    // Add other necessary fields here
 } inode_t;
 
 typedef struct
@@ -632,6 +635,11 @@ int create_directory(const char *directory_name, int parent_inode_number)
 int create_inode_for_file(const char *file_path)
 {
     inode_t inode;
+
+    inode.type = FILE_TYPE_REGULAR; // Regular file
+    inode.single_indirect = MAX_UNIT_32;
+    inode.double_indirect = MAX_UNIT_32;
+
     datablock_t datablock;
     uint32_t block_count = 0;
 
@@ -648,58 +656,163 @@ int create_inode_for_file(const char *file_path)
     inode.size = ftell(file);
     fseek(file, 0, SEEK_SET);
 
+    // printf("File Size: %lu\n", inode.size);
+    // printf("MAX_DIRECT_BLOCKS: %d\n", MAX_DIRECT_BLOCKS);
+
     // Calculate how many blocks we need
     block_count = (inode.size + BLOCK_SIZE - 1) / BLOCK_SIZE; // Ceiling division
-    if (block_count > MAX_DIRECT_BLOCKS)
+    if (USE_SINGLE_INDIRECT)
     {
-        fprintf(stderr, "File too large for direct blocks only\n");
-        fclose(file);
-        return -1;
-    }
+        // Handle large files with single indirect blocks
+        inode.type = FILE_TYPE_REGULAR;
 
-    // prefill inode MAX_DIRECT_BLOCKS with 0
-    for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
-    {
-        inode.direct_blocks[i] = MAX_UNIT_32;
-    }
+        // Allocate a directory block for indirect references
+        directoryblock_t indirect_block;
+        memset(&indirect_block, 0, sizeof(directoryblock_t));
 
-    // Read file data in chunks and create datablocks
-    for (uint32_t i = 0; i < block_count; i++)
-    {
-        // Clear the datablock
-        memset(&datablock, 0, sizeof(datablock_t));
-
-        // Read up to BLOCK_SIZE bytes into the datablock
-        size_t bytes_read = fread(datablock.data, 1, BLOCK_SIZE, file);
-
-        // Create a datablock and store its index
-        int datablock_index = create_datablock(&datablock);
-        if (datablock_index < 0)
+        // Set up all the directory entries to be empty initially
+        for (int i = 0; i < MAX_DIRECTORY_ENTRIES; i++)
         {
-            perror("Failed to create datablock");
+            indirect_block.entries[i].inuse = 0;
+            indirect_block.entries[i].inode_number = MAX_UNIT_32;
+            indirect_block.entries[i].type = FILE_TYPE_DATA_L1;
+            strncpy(indirect_block.entries[i].name, "", sizeof(indirect_block.entries[i].name) - 1);
+            indirect_block.entries[i].name[sizeof(indirect_block.entries[i].name) - 1] = '\0'; // Ensure null termination
+        }
+
+        // Create the indirect block and store its index
+        int indirect_block_index = create_directoryblock(&indirect_block);
+        if (indirect_block_index < 0)
+        {
+            fprintf(stderr, "Failed to create indirect block\n");
             fclose(file);
             return -1;
         }
 
-        // Save datablock index in inode
-        inode.direct_blocks[i] = datablock_index;
+        // Store the indirect block index
+        inode.single_indirect = indirect_block_index;
+
+        // Read file data in chunks and create datablocks
+        int chunks_created = 0;
+        for (uint32_t i = 0; i < block_count; i++)
+        {
+
+            // Skip direct blocks - we'll use indirect blocks for all chunks
+            if (chunks_created >= 128)
+            {
+                fprintf(stderr, "File too large even for single indirect blocks\n");
+                fclose(file);
+                return -1;
+            }
+
+            // Clear the datablock
+            memset(&datablock, 0, sizeof(datablock_t));
+
+            // Read up to BLOCK_SIZE bytes into the datablock
+            size_t bytes_read = fread(datablock.data, 1, BLOCK_SIZE, file);
+
+            // Create a datablock and store its index
+            int datablock_index = create_datablock(&datablock);
+            if (datablock_index < 0)
+            {
+                fprintf(stderr, "Failed to create datablock\n");
+                fclose(file);
+                return -1;
+            }
+
+            // Create directory entry for this chunk
+            directory_entry_t chunk_entry;
+            chunk_entry.inuse = 1;
+            chunk_entry.type = FILE_TYPE_DATA_L1;
+            chunk_entry.inode_number = datablock_index;
+            sprintf(chunk_entry.name, "chunk%d", chunks_created);
+
+            // Print the indirect_block_index and chunk entry
+            // printf("Indirect Block Index: %d, Chunk Entry: %d\n", indirect_block_index, chunk_entry.inode_number);
+
+            // Add the entry to our indirect block
+            if (add_directoryentry_to_directoryblock(indirect_block_index, &chunk_entry) < 0)
+            {
+                fprintf(stderr, "Failed to add entry to indirect block\n");
+                fclose(file);
+                return -1;
+            }
+
+            chunks_created++;
+        }
+    }
+    else
+    {
+        // Original code for small files (using direct blocks)
+        // prefill inode MAX_DIRECT_BLOCKS with 0
+        for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
+        {
+            inode.direct_blocks[i] = MAX_UNIT_32;
+        }
+
+        // Read file data in chunks and create datablocks
+        for (uint32_t i = 0; i < block_count; i++)
+        {
+            // Clear the datablock
+            memset(&datablock, 0, sizeof(datablock_t));
+
+            // Read up to BLOCK_SIZE bytes into the datablock
+            size_t bytes_read = fread(datablock.data, 1, BLOCK_SIZE, file);
+
+            // Create a datablock and store its index
+            int datablock_index = create_datablock(&datablock);
+            if (datablock_index < 0)
+            {
+                perror("Failed to create datablock");
+                fclose(file);
+                return -1;
+            }
+
+            // Save datablock index in inode
+            inode.direct_blocks[i] = datablock_index;
+        }
     }
 
-    printf("Total Block Count %d\n", block_count);
+    // // prefill inode MAX_DIRECT_BLOCKS with 0
+    // for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
+    // {
+    //     inode.direct_blocks[i] = MAX_UNIT_32;
+    // }
+
+    // // Read file data in chunks and create datablocks
+    // for (uint32_t i = 0; i < block_count; i++)
+    // {
+    //     // Clear the datablock
+    //     memset(&datablock, 0, sizeof(datablock_t));
+
+    //     // Read up to BLOCK_SIZE bytes into the datablock
+    //     size_t bytes_read = fread(datablock.data, 1, BLOCK_SIZE, file);
+
+    //     // Create a datablock and store its index
+    //     int datablock_index = create_datablock(&datablock);
+    //     if (datablock_index < 0)
+    //     {
+    //         perror("Failed to create datablock");
+    //         fclose(file);
+    //         return -1;
+    //     }
+
+    //     // Save datablock index in inode
+    //     inode.direct_blocks[i] = datablock_index;
+    // }
+
+    // printf("Total Block Count %d\n", block_count);
 
     // Print the inode.direct_blocks that was going to be written to the file
-    printf("Inode Direct Blocks: ");
-    for (int i = 0; i < block_count; i++)
-    {
-        printf("%u ", inode.direct_blocks[i]);
-    }
-    printf("\n");
+    // printf("Inode Direct Blocks: ");
+    // for (int i = 0; i < block_count; i++)
+    // {
+    //     printf("%u ", inode.direct_blocks[i]);
+    // }
+    // printf("\n");
 
     fclose(file);
 
-    inode.type = FILE_TYPE_REGULAR; // Regular file
-    inode.single_indirect = 0;
-    inode.double_indirect = 0;
     //  inode.triple_indirect = 0;
     // for (int i = 0; i < MAX_DIRECT_BLOCKS; i++)
     // {
@@ -775,6 +888,8 @@ int add_file(const char *fs_path, const char *local_file)
     // {
     //     printf("%s\n", path_segments[i]);
     // }
+
+    // printf("Size of file %d", sizeof(local_file));
 
     size_t inode_index = create_inode_for_file(local_file);
     if (inode_index < 0)
@@ -902,6 +1017,8 @@ int add_file(const char *fs_path, const char *local_file)
             inode_t new_dir_inode;
             memset(&new_dir_inode, 0, sizeof(inode_t));
             new_dir_inode.type = FILE_TYPE_DIRECTORY;
+            new_dir_inode.single_indirect = MAX_UNIT_32;
+            new_dir_inode.double_indirect = MAX_UNIT_32;
             for (int j = 0; j < MAX_DIRECT_BLOCKS; j++)
             {
                 new_dir_inode.direct_blocks[j] = MAX_UNIT_32;
@@ -1110,34 +1227,89 @@ int extract_file(const char *path)
         return -1;
     }
 
-    for (int m = 0; m < MAX_DIRECT_BLOCKS; m++)
+    // If the inode doesn't have a single indirect block
+    if (file_inode.single_indirect < 0 || file_inode.single_indirect == MAX_UNIT_32)
     {
 
-        if (file_inode.direct_blocks[m] == MAX_UNIT_32)
+        for (int m = 0; m < MAX_DIRECT_BLOCKS; m++)
         {
-            break; // No more direct blocks
-        }
 
-        datablock_t datablock;
+            if (file_inode.direct_blocks[m] == MAX_UNIT_32)
+            {
+                break; // No more direct blocks
+            }
 
-        int result = read_datablock(file_inode.direct_blocks[m], &datablock);
-        if (result < 0)
-        {
-            fprintf(stderr, "Failed to read datablock\n");
-            return -1;
-        }
+            datablock_t datablock;
 
-        // Only print non-null data from the datablock
-        for (int n = 0; n < BLOCK_SIZE; n++)
-        {
-            if (datablock.data[n] != '\0')
+            int result = read_datablock(file_inode.direct_blocks[m], &datablock);
+            if (result < 0)
+            {
+                fprintf(stderr, "Failed to read datablock\n");
+                return -1;
+            }
+
+            // Print everything as removeing null characters break binary files
+            for (int n = 0; n < BLOCK_SIZE; n++)
             {
                 printf("%c", datablock.data[n]);
             }
-            else
+        }
+    }
+    // If the inode block has a single indirect block
+    else
+    {
+        // Print the directory_entries of the single indirect block
+        directoryblock_t indirect_block;
+        if (read_directory_block(file_inode.single_indirect, &indirect_block) < 0)
+        {
+            fprintf(stderr, "Failed to read indirect block\n");
+            return -1;
+        }
+
+        // // Print the indirect block entries details
+        // for (int m = 0; m < MAX_DIRECTORY_ENTRIES; m++)
+        // {
+        //     if (indirect_block.entries[m].inuse == 1)
+        //     {
+        //         printf("Indirect Block Entry %d: Inode Number: %u, Type: %u\n",
+        //                m, indirect_block.entries[m].inode_number, indirect_block.entries[m].type);
+        //     }
+        // }
+
+        // Print the entries in the indirect block
+        for (int m = 0; m < MAX_DIRECTORY_ENTRIES; m++)
+        {
+            if (indirect_block.entries[m].inuse == 1)
             {
-                // Stop when hitting null characters (end of data)
-                break;
+                datablock_t datablock;
+                int result = read_datablock(indirect_block.entries[m].inode_number, &datablock);
+                if (result < 0)
+                {
+                    fprintf(stderr, "Failed to read indirect datablock\n");
+                    return -1;
+                }
+
+                // int last_block_size = file_inode.size % BLOCK_SIZE;
+                // int last_block_index = file_inode.size / BLOCK_SIZE;
+
+                // // Print last block size
+                // printf("Last Block Size: %d\n", last_block_size);
+                // printf("Last Block Index: %d\n", last_block_index);
+
+                // int loop_till = BLOCK_SIZE;
+                // if (last_block_size > 0 && m == last_block_index - 1)
+                // {
+                //     printf("Updating last loop");
+                //     loop_till = last_block_size;
+                // }
+
+                // printf("Loop till: %d\n", loop_till);
+
+                // Print everything as removeing null characters break binary files
+                for (int n = 0; n < BLOCK_SIZE; n++)
+                {
+                    printf("%c", datablock.data[n]);
+                }
             }
         }
     }
@@ -1208,7 +1380,7 @@ int debug_path(const char *path)
                     fclose(file);
                     return -2;
                 }
-                printf("Inode %d: Type: %u, Size: %lu \n", i, inode.type, inode.size);
+                printf("Inode %d: Type: %u, Size: %lu, Single Indirect %d \n", i, inode.type, inode.size, inode.single_indirect);
                 // printf("Direct blocks: ");
                 // for (int k = 0; k < MAX_DIRECT_BLOCKS; k++)
                 // {
@@ -1422,8 +1594,8 @@ int init_file_system()
         // inode.direct_blocks[0] = root_directoryblock_index;
         inode.type = FILE_TYPE_DIRECTORY; // Directory type
         inode.size = 0;                   // Size is initially 0
-        inode.single_indirect = 0;
-        inode.double_indirect = 0;
+        inode.single_indirect = MAX_UNIT_32;
+        inode.double_indirect = MAX_UNIT_32;
 
         int root_inode_index = create_inode(&inode);
         if (root_inode_index < 0)

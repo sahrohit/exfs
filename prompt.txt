@@ -49,9 +49,9 @@ Here the main.txt is a c program. In this C Program update the add_files functio
 
 If the fs_path is /dir1/dir2/sample.txt
 
-Then the root inode at inode_index 0 will have direct_blocks mapping to directory_block at index 0. 
+Then the root inode at inode_index 0 will have direct_blocks mapping to a directory_block. 
 
-Now inode for dir1 is created and then a new directory entry for under the root_directory block is created storing name as dir1 and the inode_number for recently created inode of dir1.
+Now inode for dir1 is created and then a new directory entry for it under the root_directory block is created storing name as dir1 and the inode_number for recently created inode of dir1.
 
 Similarly, do the same for dir2 and save its inode_number in dir1 directory block that is accessed in inode direct_blocks[0].
 
@@ -68,3 +68,8 @@ Update the list_directory function such that it lists inode starting from 0. If 
 =========================================================
 
 Update the extract_file function such that its parses the path provided and then returns the data of it. The last path segment is the file name and before that is all folder name. So, starting at root inode, find its directory block and then look for first directory in that directory block, if not found exit with not found, if found read the inode number and the inode block and then its directory block. Look for second segment in the direcory block. Similary get to the file inode and read all the content of the file and print it.
+
+=========================================================
+For the files that are too large, split the files into chunks and save it into a data blocks and create an array of all the created data block indexes and create directory entry for each data block and save it into a directory block with file type set to DATA_L1 and create a inode that points to the directory block.
+
+While reading the order should be read inode for a file -> read its singly indirect address -> map through all the directory entries inodes and and get datablock for all the directory entries inodes. Combining all the result will get you the entire content of the file. Use existing function in context as well.
