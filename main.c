@@ -1248,11 +1248,24 @@ int extract_file(const char *path)
                 return -1;
             }
 
+            // ******************** Print the datablock details ********************
+
+            int last_block_size = file_inode.size % BLOCK_SIZE;
+            int last_block_index = file_inode.size / BLOCK_SIZE;
+            int loop_till = BLOCK_SIZE;
+
+            if (last_block_index == m)
+            {
+                loop_till = last_block_size;
+            }
+
             // Print everything as removeing null characters break binary files
-            for (int n = 0; n < BLOCK_SIZE; n++)
+            for (int n = 0; n < loop_till; n++)
             {
                 printf("%c", datablock.data[n]);
             }
+
+            // ******************** Print the datablock details ********************
         }
     }
     // If the inode block has a single indirect block
@@ -1289,27 +1302,24 @@ int extract_file(const char *path)
                     return -1;
                 }
 
-                // int last_block_size = file_inode.size % BLOCK_SIZE;
-                // int last_block_index = file_inode.size / BLOCK_SIZE;
+                // ******************** Print the datablock details ********************
 
-                // // Print last block size
-                // printf("Last Block Size: %d\n", last_block_size);
-                // printf("Last Block Index: %d\n", last_block_index);
+                int last_block_size = file_inode.size % BLOCK_SIZE;
+                int last_block_index = file_inode.size / BLOCK_SIZE;
+                int loop_till = BLOCK_SIZE;
 
-                // int loop_till = BLOCK_SIZE;
-                // if (last_block_size > 0 && m == last_block_index - 1)
-                // {
-                //     printf("Updating last loop");
-                //     loop_till = last_block_size;
-                // }
-
-                // printf("Loop till: %d\n", loop_till);
+                if (last_block_index == m)
+                {
+                    loop_till = last_block_size;
+                }
 
                 // Print everything as removeing null characters break binary files
-                for (int n = 0; n < BLOCK_SIZE; n++)
+                for (int n = 0; n < loop_till; n++)
                 {
                     printf("%c", datablock.data[n]);
                 }
+
+                // ******************** Print the datablock details ********************
             }
         }
     }
