@@ -4,10 +4,10 @@ all:
 	gcc main.c -o $(TARGET)
 
 reset:
-	rm -f dataseg{0..100} inodeseg{0..100}
+	rm -f dataseg{0..500} inodeseg{0..500}
 
 clean:
-	rm -f $(TARGET) dataseg{0..100} inodeseg{0..100}
+	rm -f $(TARGET) dataseg{0..500} inodeseg{0..500}
 
 check:
 	#
